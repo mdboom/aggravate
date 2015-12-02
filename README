@@ -1,0 +1,4 @@
+A Python module for resampling 2D double-precision floating point
+images using all of the interpolation methods available in Agg.
+
+Experimental for now.  May be used by matplotlib some day.
