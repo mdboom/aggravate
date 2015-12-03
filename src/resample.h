@@ -35,12 +35,15 @@ either expressed or implied, of the FreeBSD Project.
 #include "agg_image_accessors.h"
 #include "agg_path_storage.h"
 #include "agg_pixfmt_gray.h"
+#include "agg_pixfmt_rgb.h"
+#include "agg_pixfmt_rgba.h"
 #include "agg_renderer_base.h"
 #include "agg_renderer_scanline.h"
 #include "agg_rasterizer_scanline_aa.h"
 #include "agg_scanline_u.h"
 #include "agg_span_allocator.h"
 #include "agg_span_image_filter_gray.h"
+#include "agg_span_image_filter_rgba.h"
 #include "agg_span_interpolator_linear.h"
 
 #include "gray64.h"
@@ -68,17 +71,107 @@ typedef enum {
 } interpolation_e;
 
 
+template <typename T>
+struct type_mapping;
+
+
+template <> class type_mapping<double>
+{
+ public:
+    typedef agg::gray64 color_type;
+    typedef agg::blender_gray<color_type> blender_type;
+    typedef agg::pixfmt_alpha_blend_gray<blender_type, agg::rendering_buffer> pixfmt_type;
+
+    template <typename A>
+    struct span_gen_type
+    {
+        typedef agg::span_image_resample_gray_affine<A> type;
+    };
+
+    template <typename A, typename B>
+    struct span_gen_nn_type
+    {
+        typedef agg::span_image_filter_gray_nn<A, B> type;
+    };
+};
+
+
+template <> class type_mapping<agg::rgba8>
+{
+ public:
+    typedef agg::rgba8 color_type;
+    typedef agg::blender_rgba32 blender_type;
+    typedef agg::pixfmt_alpha_blend_rgba<blender_type, agg::rendering_buffer> pixfmt_type;
+
+    template <typename A>
+    struct span_gen_type
+    {
+        typedef agg::span_image_resample_rgba_affine<A> type;
+    };
+
+    template <typename A, typename B>
+    struct span_gen_nn_type
+    {
+        typedef agg::span_image_filter_rgba_nn<A, B> type;
+    };
+};
+
+
+template <> class type_mapping<float>
+{
+ public:
+    typedef agg::gray32 color_type;
+    typedef agg::blender_gray<color_type> blender_type;
+    typedef agg::pixfmt_alpha_blend_gray<blender_type, agg::rendering_buffer> pixfmt_type;
+
+    template <typename A>
+    struct span_gen_type
+    {
+        typedef agg::span_image_resample_gray_affine<A> type;
+    };
+
+    template <typename A, typename B>
+    struct span_gen_nn_type
+    {
+        typedef agg::span_image_filter_gray_nn<A, B> type;
+    };
+};
+
+
+template <> class type_mapping<unsigned char>
+{
+ public:
+    typedef agg::gray8 color_type;
+    typedef agg::blender_gray<color_type> blender_type;
+    typedef agg::pixfmt_alpha_blend_gray<blender_type, agg::rendering_buffer> pixfmt_type;
+
+    template <typename A>
+    struct span_gen_type
+    {
+        typedef agg::span_image_resample_gray_affine<A> type;
+    };
+
+    template <typename A, typename B>
+    struct span_gen_nn_type
+    {
+        typedef agg::span_image_filter_gray_nn<A, B> type;
+    };
+};
+
+
+
+template<class T>
 void aggravate_resample(
     interpolation_e interpolation,
-    double *input, int in_width, int in_height,
-    double *output, int out_width, int out_height,
-    double *matrix, double norm, double radius)
+    T *input, int in_width, int in_height,
+    T *output, int out_width, int out_height,
+    double *matrix, double norm, double radius,
+    int row_offset)
 {
-    typedef agg::blender_gray<agg::gray64> input_blender_t;
-    typedef agg::pixfmt_alpha_blend_gray<input_blender_t, agg::rendering_buffer> input_pixfmt_t;
+    typedef type_mapping<T> type_mapping_t;
 
-    typedef agg::blender_gray<agg::gray64> output_blender_t;
-    typedef agg::pixfmt_alpha_blend_gray<output_blender_t, agg::rendering_buffer> output_pixfmt_t;
+    typedef typename type_mapping_t::pixfmt_type input_pixfmt_t;
+    typedef typename type_mapping_t::pixfmt_type output_pixfmt_t;
 
     typedef agg::renderer_base<output_pixfmt_t> renderer_t;
     typedef agg::rasterizer_scanline_aa<agg::rasterizer_sl_clip_dbl> rasterizer_t;
@@ -86,16 +179,18 @@ void aggravate_resample(
     typedef agg::wrap_mode_reflect reflect_t;
     typedef agg::image_accessor_wrap<input_pixfmt_t, reflect_t, reflect_t> image_accessor_t;
 
-    typedef agg::span_allocator<agg::gray64> span_alloc_t;
+    typedef agg::span_allocator<typename type_mapping_t::color_type> span_alloc_t;
     typedef agg::span_interpolator_linear<> interpolator_t;
 
-    agg::trans_affine affine(matrix);
+    agg::trans_affine affine(
+        matrix[0], matrix[3], matrix[1], matrix[4], matrix[2],
+        matrix[5] - row_offset);
     agg::trans_affine inverted = affine;
     inverted.invert();
 
     agg::rendering_buffer input_buffer;
     input_buffer.attach((unsigned char *)input, in_width, in_height,
-                        in_width * sizeof(double));
+                        in_width * sizeof(T));
 
     input_pixfmt_t input_pixfmt(input_buffer);
     image_accessor_t input_accessor(input_pixfmt);
@@ -103,7 +198,7 @@ void aggravate_resample(
 
     agg::rendering_buffer output_buffer;
     output_buffer.attach((unsigned char *)output, out_width, out_height,
-                         out_width * sizeof(double));
+                         out_width * sizeof(T));
 
     output_pixfmt_t output_pixfmt(output_buffer);
     renderer_t renderer(output_pixfmt);
@@ -125,7 +220,7 @@ void aggravate_resample(
     interpolator_t interpolator(inverted);
 
     if (interpolation == NEAREST) {
-        typedef agg::span_image_filter_gray_nn<image_accessor_t, interpolator_t> span_gen_t;
+        typedef typename type_mapping_t::template span_gen_nn_type<image_accessor_t, interpolator_t>::type span_gen_t;
         typedef agg::renderer_scanline_aa<renderer_t, span_alloc_t, span_gen_t> nn_renderer_t;
 
         span_gen_t span_gen(input_accessor, interpolator);
@@ -205,7 +300,7 @@ void aggravate_resample(
             break;
         }
 
-        typedef agg::span_image_resample_gray_affine<image_accessor_t> span_gen_t;
+        typedef typename type_mapping_t::template span_gen_type<image_accessor_t>::type span_gen_t;
         typedef agg::renderer_scanline_aa<renderer_t, span_alloc_t, span_gen_t> int_renderer_t;
 
         span_gen_t span_gen(input_accessor, interpolator, filter);
@@ -213,5 +308,28 @@ void aggravate_resample(
         agg::render_scanlines(rasterizer, scanline, int_renderer);
     }
 }
+
+
+template<class T>
+void aggravate_resample_parallel(
+    interpolation_e interpolation,
+    T *input, int in_width, int in_height,
+    T *output, int out_width, int out_height,
+    double *matrix, double norm, double radius)
+{
+    int i;
+    int step_size = 256;
+
+    #pragma omp parallel for
+    for (i = 0; i < out_height; i += step_size) {
+        aggravate_resample(
+            interpolation,
+            input, in_width, in_height,
+            output + (i * out_width), out_width,
+            std::min(out_height - i, step_size),
+            matrix, norm, radius, i);
+    }
+}
+
 
 #endif /* RESAMPLE_H */

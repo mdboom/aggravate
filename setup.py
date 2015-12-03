@@ -66,7 +66,9 @@ if __name__ == '__main__':
         glob.glob('src/doc/*.c') +
         agg_sources,
         define_macros=[('PY_ARRAY_UNIQUE_SYMBOL', 'AGGRAVATE_ARRAY_API')],
-        include_dirs=[np.get_include(), 'extern/agg24-svn/include']
+        include_dirs=[np.get_include(), 'extern/agg24-svn/include'],
+        extra_compile_args=['-fopenmp'],
+        libraries=['gomp']
         )
 
     setup(name="aggravate",

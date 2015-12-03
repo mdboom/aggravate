@@ -33,64 +33,183 @@ either expressed or implied, of the FreeBSD Project.
 
 #include "resample.h"
 
+
+template<class T>
+void aggravate_resample_allow_threads(
+    interpolation_e interpolation,
+    T *input, int in_width, int in_height,
+    T *output, int out_width, int out_height,
+    double *matrix, double norm, double radius)
+{
+    Py_BEGIN_ALLOW_THREADS
+    aggravate_resample_parallel(
+        interpolation,
+        input, in_width, in_height,
+        output, out_width, out_height,
+        matrix, norm, radius);
+    Py_END_ALLOW_THREADS
+}
+
+
 static PyObject *
 Py_resample(PyObject *self, PyObject* args, PyObject *kwargs)
 {
     int interpolation = NEAREST;
     PyObject *py_input_array = NULL;
     PyObject *py_output_array = NULL;
-    double matrix[6];
+    PyObject *py_matrix_array = NULL;
     double norm = 0.0;
     double radius = 1.0;
     PyArrayObject *input_array = NULL;
     PyArrayObject *output_array = NULL;
+    PyArrayObject *matrix_array = NULL;
 
     /* TODO: This could use the buffer interface to avoid the Numpy
        dependency, but this is easier for now. */
 
     const char *kwlist[] = {
         "input_array", "output_array",
-        "sx", "shy", "shx", "sy", "tx", "ty",
-        "interpolation", "norm", "radius", NULL };
-
-    memset(matrix, 0, sizeof(double) * 6);
+        "matrix", "interpolation", "norm", "radius", NULL };
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "OOdddd|ddidd:resample", (char **)kwlist,
-            &py_input_array, &py_output_array,
-            &matrix[0], &matrix[1], &matrix[2], &matrix[3],
-            &matrix[4], &matrix[5], &interpolation, &norm, &radius)) {
+            args, kwargs, "OOO|idd:resample", (char **)kwlist,
+            &py_input_array, &py_output_array, &py_matrix_array,
+            &interpolation, &norm, &radius)) {
         return NULL;
     }
 
     if (interpolation < 0 || interpolation >= _n_interpolation) {
         PyErr_Format(PyExc_ValueError, "invalid interpolation value %d", interpolation);
-        return NULL;
+        goto error;
     }
 
-    input_array = (PyArrayObject *)PyArray_ContiguousFromAny(py_input_array, NPY_DOUBLE, 2, 2);
+    input_array = (PyArrayObject *)PyArray_FromAny(
+        py_input_array, NULL, 2, 3, NPY_ARRAY_C_CONTIGUOUS, NULL);
     if (input_array == NULL) {
-        return NULL;
+        goto error;
     }
 
-    output_array = (PyArrayObject *)PyArray_ContiguousFromAny(py_output_array, NPY_DOUBLE, 2, 2);
+    output_array = (PyArrayObject *)PyArray_FromAny(
+        py_output_array, NULL, 2, 3, NPY_ARRAY_C_CONTIGUOUS, NULL);
     if (output_array == NULL) {
-        Py_DECREF(input_array);
-        return NULL;
+        goto error;
     }
 
-    aggravate_resample(
-        (interpolation_e)interpolation,
-        (double *)PyArray_DATA(input_array),
-        PyArray_DIM(input_array, 1),
-        PyArray_DIM(input_array, 0),
-        (double *)PyArray_DATA(output_array),
-        PyArray_DIM(output_array, 1),
-        PyArray_DIM(output_array, 0),
-        matrix, norm, radius);
+    matrix_array = (PyArrayObject *)PyArray_ContiguousFromAny(
+        py_matrix_array, NPY_DOUBLE, 2, 2);
+    if (matrix_array == NULL) {
+        goto error;
+    }
+
+    if (PyArray_DIM(matrix_array, 0) != 3 ||
+        PyArray_DIM(matrix_array, 1) != 3) {
+        PyErr_Format(
+            PyExc_ValueError, "Matrix must be 3x3, got %dx%d",
+            PyArray_DIM(matrix_array, 0), PyArray_DIM(matrix_array, 1));
+        goto error;
+    }
+
+    if (PyArray_NDIM(input_array) != PyArray_NDIM(output_array)) {
+        PyErr_Format(PyExc_ValueError, "Mismatched number of dimensions.  Got %d and %d.",
+                     PyArray_NDIM(input_array), PyArray_NDIM(output_array));
+        goto error;
+    }
+
+    if (PyArray_TYPE(input_array) != PyArray_TYPE(output_array)) {
+        PyErr_SetString(PyExc_ValueError, "Mismatched types.");
+        goto error;
+    }
+
+    if (PyArray_NDIM(input_array) == 3) {
+        if (PyArray_TYPE(input_array) != NPY_UBYTE ||
+            PyArray_TYPE(input_array) != NPY_UINT8) {
+            PyErr_SetString(PyExc_ValueError,
+                            "3-dimensional arrays must be of type unsigned byte");
+            goto error;
+        }
+
+        if (PyArray_DIM(input_array, 2) != PyArray_DIM(output_array, 2)) {
+            PyErr_SetString(PyExc_ValueError,
+                            "Mismatched shapes");
+            goto error;
+        }
+
+        // if (PyArray_DIM(input_array, 2) == 3) {
+        //     aggravate_resample(
+        //         (interpolation_e)interpolation,
+        //         (agg::rgb8 *)PyArray_DATA(input_array),
+        //         PyArray_DIM(input_array, 1),
+        //         PyArray_DIM(input_array, 0),
+        //         (agg::rgb8 *)PyArray_DATA(output_array),
+        //         PyArray_DIM(output_array, 1),
+        //         PyArray_DIM(output_array, 0),
+        //         matrix, norm, radius);
+        if (PyArray_DIM(input_array, 2) == 4) {
+            aggravate_resample_allow_threads(
+                (interpolation_e)interpolation,
+                (agg::rgba8 *)PyArray_DATA(input_array),
+                PyArray_DIM(input_array, 1),
+                PyArray_DIM(input_array, 0),
+                (agg::rgba8 *)PyArray_DATA(output_array),
+                PyArray_DIM(output_array, 1),
+                PyArray_DIM(output_array, 0),
+                (double *)PyArray_DATA(matrix_array),
+                norm, radius);
+        } else {
+            PyErr_Format(PyExc_ValueError,
+                         "If 3-dimensional, array must be RGBA.  Got %d.",
+                         PyArray_DIM(input_array, 2));
+            goto error;
+        }
+    } else { // NDIM == 2
+        if (PyArray_TYPE(input_array) == NPY_DOUBLE) {
+            aggravate_resample_allow_threads(
+                (interpolation_e)interpolation,
+                (double *)PyArray_DATA(input_array),
+                PyArray_DIM(input_array, 1),
+                PyArray_DIM(input_array, 0),
+                (double *)PyArray_DATA(output_array),
+                PyArray_DIM(output_array, 1),
+                PyArray_DIM(output_array, 0),
+                (double *)PyArray_DATA(matrix_array),
+                norm, radius);
+        } else if (PyArray_TYPE(input_array) == NPY_FLOAT) {
+            aggravate_resample_allow_threads(
+                (interpolation_e)interpolation,
+                (float *)PyArray_DATA(input_array),
+                PyArray_DIM(input_array, 1),
+                PyArray_DIM(input_array, 0),
+                (float *)PyArray_DATA(output_array),
+                PyArray_DIM(output_array, 1),
+                PyArray_DIM(output_array, 0),
+                (double *)PyArray_DATA(matrix_array),
+                norm, radius);
+        } else if (PyArray_TYPE(input_array) == NPY_UINT8) {
+            aggravate_resample_allow_threads(
+                (interpolation_e)interpolation,
+                (unsigned char *)PyArray_DATA(input_array),
+                PyArray_DIM(input_array, 1),
+                PyArray_DIM(input_array, 0),
+                (unsigned char *)PyArray_DATA(output_array),
+                PyArray_DIM(output_array, 1),
+                PyArray_DIM(output_array, 0),
+                (double *)PyArray_DATA(matrix_array),
+                norm, radius);
+        } else {
+            PyErr_SetString(PyExc_ValueError, "Unsupported dtype");
+            goto error;
+        }
+    }
 
     Py_DECREF(input_array);
+    Py_DECREF(matrix_array);
     return (PyObject *)output_array;
+
+ error:
+    Py_XDECREF(input_array);
+    Py_XDECREF(output_array);
+    Py_XDECREF(matrix_array);
+    return NULL;
 }
 
 
