@@ -60,15 +60,24 @@ if __name__ == '__main__':
     agg_sources = [
         os.path.join('extern', 'agg24-svn', 'src', x) for x in agg_sources]
 
+    extra_compile_args = []
+    libraries = []
+    define_macros = [('PY_ARRAY_UNIQUE_SYMBOL', 'AGGRAVATE_ARRAY_API')]
+
+    if sys.platform == 'linux2':
+        extra_compile_args.append('-fopenmp')
+        libraries.append('libgomp')
+        define_macros.append(('USE_OPENMP', 1))
+
     extension = Extension(
         'aggravate._aggravate',
         glob.glob('src/*.cpp') +
         glob.glob('src/doc/*.c') +
         agg_sources,
-        define_macros=[('PY_ARRAY_UNIQUE_SYMBOL', 'AGGRAVATE_ARRAY_API')],
+        define_macros=define_macros,
         include_dirs=[np.get_include(), 'extern/agg24-svn/include'],
-        extra_compile_args=['-fopenmp'],
-        libraries=['gomp']
+        extra_compile_args=extra_compile_args,
+        libraries=libraries
         )
 
     setup(name="aggravate",
