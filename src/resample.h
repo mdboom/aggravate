@@ -72,7 +72,7 @@ typedef enum {
 
 
 template <typename T>
-struct type_mapping;
+class type_mapping;
 
 
 template <> class type_mapping<double>
@@ -83,7 +83,7 @@ template <> class type_mapping<double>
     typedef agg::pixfmt_alpha_blend_gray<blender_type, agg::rendering_buffer> pixfmt_type;
 
     template <typename A>
-    struct span_gen_type
+    struct span_gen_affine_type
     {
         typedef agg::span_image_resample_gray_affine<A> type;
     };
@@ -104,7 +104,7 @@ template <> class type_mapping<agg::rgba8>
     typedef agg::pixfmt_alpha_blend_rgba<blender_type, agg::rendering_buffer> pixfmt_type;
 
     template <typename A>
-    struct span_gen_type
+    struct span_gen_affine_type
     {
         typedef agg::span_image_resample_rgba_affine<A> type;
     };
@@ -125,7 +125,7 @@ template <> class type_mapping<float>
     typedef agg::pixfmt_alpha_blend_gray<blender_type, agg::rendering_buffer> pixfmt_type;
 
     template <typename A>
-    struct span_gen_type
+    struct span_gen_affine_type
     {
         typedef agg::span_image_resample_gray_affine<A> type;
     };
@@ -146,7 +146,7 @@ template <> class type_mapping<unsigned char>
     typedef agg::pixfmt_alpha_blend_gray<blender_type, agg::rendering_buffer> pixfmt_type;
 
     template <typename A>
-    struct span_gen_type
+    struct span_gen_affine_type
     {
         typedef agg::span_image_resample_gray_affine<A> type;
     };
@@ -182,28 +182,29 @@ void aggravate_resample(
     typedef agg::span_allocator<typename type_mapping_t::color_type> span_alloc_t;
     typedef agg::span_interpolator_linear<> interpolator_t;
 
+    span_alloc_t span_alloc;
+    rasterizer_t rasterizer;
+    agg::scanline_u8 scanline;
+
     agg::trans_affine affine(
-        matrix[0], matrix[3], matrix[1], matrix[4], matrix[2],
-        matrix[5] - row_offset);
+        matrix[0], matrix[3],
+        matrix[1], matrix[4],
+        matrix[2], matrix[5] - row_offset);
     agg::trans_affine inverted = affine;
     inverted.invert();
+    interpolator_t interpolator(inverted);
 
     agg::rendering_buffer input_buffer;
     input_buffer.attach((unsigned char *)input, in_width, in_height,
                         in_width * sizeof(T));
-
     input_pixfmt_t input_pixfmt(input_buffer);
     image_accessor_t input_accessor(input_pixfmt);
-    span_alloc_t span_alloc;
 
     agg::rendering_buffer output_buffer;
     output_buffer.attach((unsigned char *)output, out_width, out_height,
                          out_width * sizeof(T));
-
     output_pixfmt_t output_pixfmt(output_buffer);
     renderer_t renderer(output_pixfmt);
-    rasterizer_t rasterizer;
-    agg::scanline_u8 scanline;
 
     rasterizer.clip_box(0, 0, out_width, out_height);
 
@@ -214,10 +215,7 @@ void aggravate_resample(
     path.line_to(0, in_height);
     path.close_polygon();
     agg::conv_transform<agg::path_storage> rectangle(path, affine);
-
     rasterizer.add_path(rectangle);
-
-    interpolator_t interpolator(inverted);
 
     if (interpolation == NEAREST) {
         typedef typename type_mapping_t::template span_gen_nn_type<image_accessor_t, interpolator_t>::type span_gen_t;
@@ -300,7 +298,7 @@ void aggravate_resample(
             break;
         }
 
-        typedef typename type_mapping_t::template span_gen_type<image_accessor_t>::type span_gen_t;
+        typedef typename type_mapping_t::template span_gen_affine_type<image_accessor_t>::type span_gen_t;
         typedef agg::renderer_scanline_aa<renderer_t, span_alloc_t, span_gen_t> int_renderer_t;
 
         span_gen_t span_gen(input_accessor, interpolator, filter);
@@ -317,6 +315,7 @@ void aggravate_resample_parallel(
     T *output, int out_width, int out_height,
     double *matrix, double norm, double radius)
 {
+    #if USE_OPENMP
     int i;
     int step_size = 256;
 
@@ -329,6 +328,13 @@ void aggravate_resample_parallel(
             std::min(out_height - i, step_size),
             matrix, norm, radius, i);
     }
+    #else
+        aggravate_resample(
+            interpolation,
+            input, in_width, in_height,
+            output, out_width, out_height,
+            matrix, norm, radius, 0);
+   #endif
 }
 
 
